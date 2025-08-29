@@ -6,20 +6,29 @@ import json
 app = Flask(__name__)
 
 # Default graph
-def create_default_graph():
-    G = nx.gnm_random_graph(10, 20, seed=42)
-    # ensure connectivity for nicer visuals
-    if not nx.is_connected(G):
-        G = nx.Graph()
-        G.add_nodes_from(range(10))
-        edges = set()
-        np.random.seed(42)
-        while len(edges) < 20:
-            a = np.random.randint(0, 10)
-            b = np.random.randint(0, 10)
-            if a != b:
-                edges.add(tuple(sorted((a, b))))
-        G.add_edges_from(list(edges))
+def create_default_graph(num_nodes=6, num_edges=10):
+    # Validate inputs
+    num_nodes = max(1, min(10, num_nodes))  # Clamp to 1-10 nodes
+    max_possible_edges = (num_nodes * (num_nodes - 1)) // 2  # Max edges for undirected graph
+    num_edges = max(1, min(20, min(max_possible_edges, num_edges)))  # Clamp to 1-20 and possible edges
+    
+    G = nx.Graph()
+    G.add_nodes_from(range(num_nodes))
+    edges = set()
+    
+    # First ensure connectivity with minimum spanning tree (n-1 edges)
+    nodes = list(range(num_nodes))
+    for i in range(num_nodes-1):
+        edges.add(tuple(sorted((nodes[i], nodes[i+1]))))
+    
+    # Add remaining random edges up to target
+    while len(edges) < num_edges:
+        a = np.random.randint(0, num_nodes)
+        b = np.random.randint(0, num_nodes)
+        if a != b:
+            edges.add(tuple(sorted((a, b))))
+    
+    G.add_edges_from(list(edges))
     return G
 
 # Simple message-passing layers to illustrate behavior
@@ -85,12 +94,21 @@ def compute():
     layer_type = data.get('model', 'GCN')
     num_layers = int(data.get('layers', 2))
     pooling = data.get('pooling', 'mean')
-
-    G = create_default_graph()
-    # initial embedding: diverse values representing different node types
-    # High influence nodes (0, 1), Medium nodes (2, 3, 4), Low influence nodes (5, 6), Hub nodes (7, 8, 9)
-    emb = np.array([2.0, 1.8, 1.2, 0.9, 1.1, 0.4, 0.6, 1.5, 1.3, 1.7], dtype=float)
-
+    num_nodes = int(data.get('nodes', 6))
+    num_edges = int(data.get('edges', 10))
+    regenerate = bool(data.get('regenerate', False))
+    
+    # Use static seed if not regenerating
+    if not regenerate:
+        np.random.seed(42)
+    
+    G = create_default_graph(num_nodes, num_edges)
+    
+    # Generate initial embeddings - constant unless regenerating
+    if not regenerate:
+        np.random.seed(42)  # Use same seed for consistent embeddings
+    emb = 0.5 + 1.5 * np.random.random(num_nodes)
+    
     timeline = []
     timeline.append({'layer': 0, 'embeddings': emb.tolist(), 'ops': []})
 

@@ -5,8 +5,12 @@
   <title>GNN Interactive Demo</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
-    #controls { margin-bottom: 20px; }
-    #graph-initial, #graph-final { width: 300px; height: 300px; border: 1px solid #ddd; }
+    #controls      const w = 380, h = 380;  // Increased size for better visibility
+      const nodes = graph.nodes;
+      const links = graph.links;
+
+      const cx = w/2, cy = h/2, r = Math.min(w,h)/2 - 70;  // Adjusted radius for larger spacingrgin-bottom: 20px; }
+    #graph-initial, #graph-final, [id^="graph-layer-"] { width: 380px; height: 380px; border: 1px solid #ddd; margin: 0 auto; }
     .node { cursor: pointer; }
     #timeline { margin-top: 20px; }
     .bar { height: 12px; background: steelblue; margin: 3px 0; }
@@ -28,27 +32,36 @@
 <body>
   <h2>Simple GNN Interactive Demo</h2>
   <div id="controls">
-    Model:
-    <select id="model">
-      <option>GCN</option>
-      <option>GAN</option>
-      <option>GIN</option>
-      <option>GraphSage</option>
-    </select>
-    Layers:
-    <select id="layers">
-      <option>1</option>
-      <option selected>2</option>
-      <option>3</option>
-      <option>4</option>
-    </select>
-    Pooling:
-    <select id="pooling">
-      <option value="max">max</option>
-      <option value="mean" selected>mean</option>
-      <option value="attention">attention</option>
-    </select>
-    <button id="run">Run</button>
+    <div style="margin-bottom: 15px;">
+      <label>Nodes: </label>
+      <input type="number" id="numNodes" min="1" max="10" value="6" style="width: 60px;">
+      <label style="margin-left: 15px;">Edges: </label>
+      <input type="number" id="numEdges" min="1" max="20" value="10" style="width: 60px;">
+      <button id="newGraph" style="margin-left: 10px;">New Graph</button>
+    </div>
+    <div>
+      Model:
+      <select id="model">
+        <option>GCN</option>
+        <option>GAN</option>
+        <option>GIN</option>
+        <option>GraphSage</option>
+      </select>
+      Layers:
+      <select id="layers">
+        <option>1</option>
+        <option selected>2</option>
+        <option>3</option>
+        <option>4</option>
+      </select>
+      Pooling:
+      <select id="pooling">
+        <option value="max">max</option>
+        <option value="mean" selected>mean</option>
+        <option value="attention">attention</option>
+      </select>
+      <button id="run">Run Model</button>
+    </div>
   </div>
 
   <div style="display:flex;gap:20px;align-items:flex-start;min-height:600px;">
@@ -88,15 +101,34 @@
       const layers = parseInt(document.getElementById('layers').value, 10);
       const pooling = document.getElementById('pooling').value;
 
-      const N = 10;
-      // create deterministic edges
+      const N = parseInt(document.getElementById('numNodes').value);
+      const targetEdges = parseInt(document.getElementById('numEdges').value);
+      
+      // Use seeded RNG for consistent results
+      const seededRandom = (seed=>{
+        let s=seed;
+        return () => {
+          s=(s*1664525+1013904223)>>>0;
+          return s/4294967296;
+        };
+      })(42);
+
+      // Create edges ensuring connectivity
       const edges = [];
-      const rng = (seed=>{let s=seed; return ()=>{s=(s*1664525+1013904223)>>>0; return s;}})(42);
       const edgeSet = new Set();
-      while (edgeSet.size < 20) {
-        let a = rng()%N, b = rng()%N;
-        if (a===b) continue;
-        const key = a<b?`${a},${b}`:`${b},${a}`;
+      
+      // First ensure connectivity with a simple path
+      for (let i = 0; i < N-1; i++) {
+        const key = i + ',' + (i+1);
+        edgeSet.add(key);
+      }
+      
+      // Add remaining random edges
+      while (edgeSet.size < targetEdges && edgeSet.size < (N * (N-1))/2) {
+        let a = Math.floor(seededRandom() * N);
+        let b = Math.floor(seededRandom() * N);
+        if (a === b) continue;
+        const key = a<b ? `${a},${b}` : `${b},${a}`;
         edgeSet.add(key);
       }
       
@@ -110,7 +142,8 @@
         links: edges
       };
       
-      let emb = [2.0, 1.8, 1.2, 0.9, 1.1, 0.4, 0.6, 1.5, 1.3, 1.7];
+      // Use seeded random for consistent initial embeddings
+      let emb = Array.from({length:N}, () => 0.5 + 1.5 * seededRandom());
       const timeline = [{layer:0, embeddings:emb.slice(), ops:[]}];
 
       function applyLayerJS(graph, embeddings, layerNum) {
@@ -202,10 +235,8 @@
         const maxv = Math.max(...embeddings);
         const norm = (v) => (maxv===minv) ? 0.5 : (v - minv)/(maxv-minv);
         
-        // Base size and scaling factor
-        const baseSize = 8;
-        const maxSize = 18;
-        const sizeRange = maxSize - baseSize;
+        // Constant node size
+        const nodeSize = 20;  // Fixed size for all nodes
 
         nodes.forEach(n => {
           const i = n.id;
@@ -213,9 +244,6 @@
           const y = cy + r * Math.sin(angle(i));
           const v = embeddings[i];
           const t = norm(v);
-          
-          // Dynamic node size based on embedding value
-          const nodeSize = baseSize + (t * sizeRange);
           
           // Color based on embedding value
           const color = 'rgb(' + Math.round(255 * t) + ',0,' + Math.round(255*(1-t)) + ')';
@@ -229,11 +257,15 @@
           }
           
           html += '<g class="node" transform="translate('+x+','+y+')">';
+          // Node circle
           html += '<circle r="'+nodeSize+'" fill="'+color+'" stroke="#222" stroke-width="2" />';
-          html += '<text x="0" y="-'+Math.max(8, nodeSize-2)+'" text-anchor="middle" font-size="7" fill="#fff" font-weight="bold">ID:'+i+'</text>';
-          html += '<text x="0" y="'+Math.max(4, nodeSize-4)+'" text-anchor="middle" font-size="8" fill="#fff" font-weight="bold">'+v.toFixed(2)+'</text>';
+          // Node ID - bigger and outside the circle
+          html += '<text x="0" y="-'+(nodeSize + 8)+'" text-anchor="middle" font-size="12" fill="#000" font-weight="bold" style="filter: drop-shadow(0 0 2px white)">ID: '+i+'</text>';
+          // Node value - centered in circle
+          html += '<text x="0" y="4" text-anchor="middle" font-size="10" fill="#fff" font-weight="bold" style="filter: drop-shadow(0 0 1px black)">'+v.toFixed(2)+'</text>';
+          // Change indicator - more visible
           if (changeIndicator) {
-            html += '<text x="'+Math.max(8, nodeSize+2)+'" y="-'+Math.max(4, nodeSize-4)+'" text-anchor="middle" font-size="10" fill="#ff6b6b" font-weight="bold">'+changeIndicator+'</text>';
+            html += '<text x="'+(nodeSize + 5)+'" y="0" text-anchor="start" font-size="12" fill="#ff6b6b" font-weight="bold" style="filter: drop-shadow(0 0 2px white)">'+changeIndicator+'</text>';
           }
           html += '</g>';
         });
@@ -441,11 +473,46 @@
       const graphEl = document.getElementById('graph-visualizations');
       if (graphEl) graphEl.innerHTML = '<div style="text-align: center; padding: 50px; color: #666;">Loading graph visualizations...</div>';
 
-      async function runOnce() {
+      // Add input validation and update handlers
+      const numNodesInput = document.getElementById('numNodes');
+      const numEdgesInput = document.getElementById('numEdges');
+      
+      function updateMaxEdges() {
+        const n = parseInt(numNodesInput.value);
+        const maxPossible = (n * (n-1)) / 2;
+        numEdgesInput.max = Math.min(20, maxPossible);
+        if (parseInt(numEdgesInput.value) > numEdgesInput.max) {
+          numEdgesInput.value = numEdgesInput.max;
+        }
+      }
+      
+      numNodesInput.addEventListener('change', updateMaxEdges);
+      updateMaxEdges(); // Initial update
+
+      async function runOnce(regenerate = false) {
         try {
           document.getElementById('status').textContent = 'Running...';
-          const data = await fetchCompute();
-          let payload = data;
+          const nodes = parseInt(numNodesInput.value);
+          const edges = parseInt(numEdgesInput.value);
+          
+          const params = {
+            model: document.getElementById('model').value,
+            layers: document.getElementById('layers').value,
+            pooling: document.getElementById('pooling').value,
+            nodes: nodes,
+            edges: edges,
+            regenerate: regenerate
+          };
+          
+          const res = await fetch('/compute', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(params),
+            cache: 'no-cache'
+          });
+          
+          let payload = await res.json();
+          if (!res.ok) throw new Error('Server returned ' + res.status);
           
           if (!payload) {
             payload = localCompute();
@@ -474,8 +541,9 @@
         }
       }
 
-      document.getElementById('run').addEventListener('click', runOnce);
-      runOnce();  // initial run
+      document.getElementById('run').addEventListener('click', () => runOnce(false));
+      document.getElementById('newGraph').addEventListener('click', () => runOnce(true));
+      runOnce(false);  // initial run with fixed seed
     });
   </script>
 </body>
