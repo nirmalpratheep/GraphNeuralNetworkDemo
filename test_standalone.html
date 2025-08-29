@@ -1,0 +1,342 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GNN Test - Standalone</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #controls { margin-bottom: 20px; }
+    #graph-initial, #graph-final { width: 300px; height: 300px; border: 1px solid #ddd; }
+    .node { cursor: pointer; }
+    #timeline { margin-top: 20px; }
+    .bar { height: 12px; background: steelblue; margin: 3px 0; }
+    #calculations { margin-top: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px; }
+    .calculation-step { margin: 10px 0; padding: 10px; background: white; border-left: 3px solid #007acc; }
+    .formula { font-family: monospace; background: #e8e8e8; padding: 5px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h2>GNN Test - Standalone Version</h2>
+  <div id="controls">
+    Model:
+    <select id="model">
+      <option>GCN</option>
+      <option>GAN</option>
+      <option>GIN</option>
+      <option>GraphSage</option>
+    </select>
+    Layers:
+    <select id="layers">
+      <option>1</option>
+      <option selected>2</option>
+      <option>3</option>
+      <option>4</option>
+    </select>
+    Pooling:
+    <select id="pooling">
+      <option value="max">max</option>
+      <option value="mean" selected>mean</option>
+      <option value="attention">attention</option>
+    </select>
+    <button id="run">Run</button>
+  </div>
+
+  <div style="display:flex;gap:20px;align-items:flex-start">
+    <div>
+      <h3>Initial Embeddings</h3>
+      <div id="graph-initial"></div>
+    </div>
+    <div>
+      <h3>Final Embeddings</h3>
+      <div id="graph-final"></div>
+    </div>
+  </div>
+
+  <div id="timeline"></div>
+  <div id="calculations"></div>
+
+  <script>
+    function localCompute() {
+      const model = document.getElementById('model').value;
+      const layers = parseInt(document.getElementById('layers').value, 10);
+      const pooling = document.getElementById('pooling').value;
+
+      const N = 10;
+      // create deterministic edges
+      const edges = [];
+      const rng = (seed=>{let s=seed; return ()=>{s=(s*1664525+1013904223)>>>0; return s;}})(42);
+      const edgeSet = new Set();
+      while (edgeSet.size < 20) {
+        let a = rng()%N, b = rng()%N;
+        if (a===b) continue;
+        const key = a<b?`${a},${b}`:`${b},${a}`;
+        edgeSet.add(key);
+      }
+      
+      edgeSet.forEach(k => {
+        const [a,b] = k.split(',');
+        edges.push({source: parseInt(a), target: parseInt(b)});
+      });
+
+      const graph = {
+        nodes: Array.from({length:N}, (_,i) => ({id:i})),
+        links: edges
+      };
+      
+      let emb = [1.0, 0.5, 1.5, 0.8, 1.2, 0.3, 1.7, 0.9, 1.1, 0.6];
+      const timeline = [{layer:0, embeddings:emb.slice(), ops:[]}];
+
+      function applyLayerJS(graph, embeddings, layerNum) {
+        const N = embeddings.length;
+        const newEmb = new Array(N).fill(0);
+        const ops = [];
+        
+        for (let node=0; node<N; node++) {
+          const neigh = graph.links
+            .filter(l => l.source===node || l.target===node)
+            .map(l => l.source===node ? l.target : l.source);
+          
+          const neigh_vals = neigh.map(i => embeddings[i]);
+          let pooled = 0;
+          
+          if (neigh_vals.length > 0) {
+            if (pooling==='mean') {
+              pooled = neigh_vals.reduce((a,b) => a+b, 0) / neigh_vals.length;
+            }
+            else if (pooling==='max') {
+              pooled = Math.max(...neigh_vals);
+            }
+            else { // attention
+              const scores = neigh_vals.map(v => Math.exp(v));
+              const s = scores.reduce((a,b) => a+b, 0);
+              pooled = neigh_vals.reduce((sum,v,i) => sum + v*(scores[i]/s), 0);
+            }
+          }
+
+          let updated = embeddings[node];
+          if (model==='GCN') {
+            updated = 0.5*embeddings[node] + 0.5*pooled;
+          }
+          else if (model==='GIN') {
+            updated = 1.2*embeddings[node] + 0.8*pooled;
+          }
+          else if (model==='GraphSage') {
+            updated = Math.tanh(embeddings[node] + pooled);
+          }
+          else if (model==='GAN') {
+            const gate = 1/(1+Math.exp(-embeddings[node]));
+            updated = gate*embeddings[node] + (1-gate)*pooled;
+          }
+
+          newEmb[node] = updated;
+          ops.push({
+            node: node,
+            self: embeddings[node],
+            pooled: pooled,
+            updated: updated,
+            neighbors: neigh
+          });
+        }
+        return [newEmb, ops];
+      }
+
+      for (let L=1; L<=layers; L++) {
+        const [newEmb, ops] = applyLayerJS(graph, emb, L);
+        emb = newEmb;
+        timeline.push({layer:L, embeddings:emb.slice(), ops:ops});
+      }
+
+      return {graph, timeline};
+    }
+
+    function drawGraph(targetId, graph, embeddings) {
+      try {
+        const w = 300, h = 300;
+        const nodes = graph.nodes;
+        const links = graph.links;
+
+        const cx = w/2, cy = h/2, r = Math.min(w,h)/2 - 40;
+        const angle = (i) => 2 * Math.PI * i / nodes.length;
+
+        let html = '<svg width="'+w+'" height="'+h+'">';
+        
+        // links first (under nodes)
+        links.forEach(l => {
+          const a = l.source, b = l.target;
+          const ax = cx + r * Math.cos(angle(a));
+          const ay = cy + r * Math.sin(angle(a));
+          const bx = cx + r * Math.cos(angle(b));
+          const by = cy + r * Math.sin(angle(b));
+          html += '<line x1="'+ax+'" y1="'+ay+'" x2="'+bx+'" y2="'+by+'" stroke="#999" />';
+        });
+
+        // nodes with embedding values
+        const minv = Math.min(...embeddings);
+        const maxv = Math.max(...embeddings);
+        const norm = (v) => (maxv===minv) ? 0.5 : (v - minv)/(maxv-minv);
+
+        nodes.forEach(n => {
+          const i = n.id;
+          const x = cx + r * Math.cos(angle(i));
+          const y = cy + r * Math.sin(angle(i));
+          const v = embeddings[i];
+          const t = norm(v);
+          const color = 'rgb(' + Math.round(255 * t) + ',0,' + Math.round(255*(1-t)) + ')';
+          html += '<g class="node" transform="translate('+x+','+y+')">';
+          html += '<circle r="18" fill="'+color+'" stroke="#222" />';
+          html += '<text x="0" y="4" text-anchor="middle" font-size="10" fill="#fff">'+v.toFixed(2)+'</text>';
+          html += '</g>';
+        });
+
+        html += '</svg>';
+        document.getElementById(targetId).innerHTML = html;
+      } catch (err) {
+        console.error('drawGraph error:', err);
+        const el = document.getElementById(targetId);
+        if (el) el.innerHTML = '<div style="color:crimson">Error drawing graph: '+(err.message||err)+'</div>';
+      }
+    }
+
+    function showTimeline(timeline) {
+      try {
+        let html = '';
+        timeline.forEach(frame => {
+          html += '<div><strong>Layer '+frame.layer+'</strong></div>';
+          html += '<div style="width:600px">';
+          const emb = frame.embeddings;
+          const max = Math.max(...emb);
+          for (let i=0; i<emb.length; i++) {
+            const w = Math.max(1, Math.round((emb[i]/(max||1))*500));
+            html += '<div style="display:flex;align-items:center">';
+            html += '<div style="width:40px">#'+i+'</div>';
+            html += '<div class="bar" style="width:'+w+'px"></div>';
+            html += '<div style="width:80px;margin-left:8px">'+emb[i].toFixed(3)+'</div>';
+            html += '</div>';
+          }
+          html += '</div>';
+        });
+        document.getElementById('timeline').innerHTML = html;
+      } catch (err) {
+        console.error('showTimeline error:', err);
+        const el = document.getElementById('timeline');
+        if (el) el.innerHTML = '<div style="color:crimson">Error rendering timeline: '+(err.message||err)+'</div>';
+      }
+    }
+
+    function showCalculations(timeline, model, pooling) {
+      try {
+        let html = '<h3>Calculation Details</h3>';
+        
+        // Show the general formula for the selected model
+        html += '<div class="calculation-step">';
+        html += '<strong>Model: ' + model + '</strong><br>';
+        html += '<strong>Pooling: ' + pooling + '</strong><br>';
+        
+        if (model === 'GCN') {
+          html += '<div class="formula">updated = 0.5 × self + 0.5 × pooled_neighbors</div>';
+        } else if (model === 'GIN') {
+          html += '<div class="formula">updated = 1.2 × self + 0.8 × pooled_neighbors</div>';
+        } else if (model === 'GraphSage') {
+          html += '<div class="formula">updated = tanh(self + pooled_neighbors)</div>';
+        } else if (model === 'GAN') {
+          html += '<div class="formula">gate = 1/(1 + exp(-self))<br>updated = gate × self + (1-gate) × pooled_neighbors</div>';
+        }
+        
+        if (pooling === 'mean') {
+          html += '<div class="formula">pooled_neighbors = mean(neighbor_values)</div>';
+        } else if (pooling === 'max') {
+          html += '<div class="formula">pooled_neighbors = max(neighbor_values)</div>';
+        } else if (pooling === 'attention') {
+          html += '<div class="formula">scores = exp(neighbor_values)<br>weights = scores / sum(scores)<br>pooled_neighbors = sum(weights × neighbor_values)</div>';
+        }
+        html += '</div>';
+
+        // Show detailed calculations for each layer
+        timeline.forEach((frame, layerIdx) => {
+          if (frame.layer === 0) return; // Skip initial layer
+          
+          html += '<div class="calculation-step">';
+          html += '<strong>Layer ' + frame.layer + ' Calculations:</strong><br>';
+          
+          if (frame.ops && frame.ops.length > 0) {
+            frame.ops.forEach(op => {
+              html += `<strong>Node ${op.node}:</strong><br>`;
+              html += `&nbsp;&nbsp;Self value: ${op.self.toFixed(3)}<br>`;
+              html += `&nbsp;&nbsp;Neighbors: [${op.neighbors.join(', ')}]<br>`;
+              html += `&nbsp;&nbsp;Pooled neighbors (${pooling}): ${op.pooled.toFixed(3)}<br>`;
+              
+              // Show the specific calculation based on model
+              if (model === 'GCN') {
+                html += `&nbsp;&nbsp;Calculation: 0.5 × ${op.self.toFixed(3)} + 0.5 × ${op.pooled.toFixed(3)} = ${op.updated.toFixed(3)}<br>`;
+              } else if (model === 'GIN') {
+                html += `&nbsp;&nbsp;Calculation: 1.2 × ${op.self.toFixed(3)} + 0.8 × ${op.pooled.toFixed(3)} = ${op.updated.toFixed(3)}<br>`;
+              } else if (model === 'GraphSage') {
+                html += `&nbsp;&nbsp;Calculation: tanh(${op.self.toFixed(3)} + ${op.pooled.toFixed(3)}) = ${op.updated.toFixed(3)}<br>`;
+              } else if (model === 'GAN') {
+                const gate = 1/(1+Math.exp(-op.self));
+                html += `&nbsp;&nbsp;Gate: 1/(1 + exp(-${op.self.toFixed(3)})) = ${gate.toFixed(3)}<br>`;
+                html += `&nbsp;&nbsp;Calculation: ${gate.toFixed(3)} × ${op.self.toFixed(3)} + (1-${gate.toFixed(3)}) × ${op.pooled.toFixed(3)} = ${op.updated.toFixed(3)}<br>`;
+              }
+              html += '<br>';
+            });
+          } else {
+            // Fallback: show embedding values
+            html += '<em>Detailed operations not available, showing final values:</em><br>';
+            frame.embeddings.forEach((val, idx) => {
+              html += `Node ${idx}: ${val.toFixed(3)}<br>`;
+            });
+          }
+          html += '</div>';
+        });
+        
+        document.getElementById('calculations').innerHTML = html;
+      } catch (err) {
+        console.error('showCalculations error:', err);
+        const el = document.getElementById('calculations');
+        if (el) el.innerHTML = '<div style="color:crimson">Error showing calculations: '+(err.message||err)+'</div>';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('Page loaded, initializing...');
+
+      // Show placeholder SVGs immediately
+      ['graph-initial', 'graph-final'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '<svg width="300" height="300"><text x="150" y="150" text-anchor="middle">Loading...</text></svg>';
+      });
+
+      function runOnce() {
+        try {
+          console.log('Running computation...');
+          const payload = localCompute();
+          console.log('Computation result:', payload);
+
+          const timeline = payload.timeline;
+          if (!timeline || !timeline.length) throw new Error('No timeline returned');
+          
+          const initial = timeline[0];
+          const final = timeline[timeline.length-1];
+          drawGraph('graph-initial', payload.graph, initial.embeddings);
+          drawGraph('graph-final', payload.graph, final.embeddings);
+          showTimeline(timeline);
+          
+          // Show detailed calculations
+          const model = document.getElementById('model').value;
+          const pooling = document.getElementById('pooling').value;
+          showCalculations(timeline, model, pooling);
+          
+          // Debug: log the timeline data
+          console.log('Timeline data:', timeline);
+        } catch (err) {
+          console.error('runOnce error:', err);
+          alert('Error: ' + (err.message || err));
+        }
+      }
+
+      document.getElementById('run').addEventListener('click', runOnce);
+      runOnce();  // initial run
+    });
+  </script>
+</body>
+</html>
