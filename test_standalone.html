@@ -53,16 +53,7 @@
 
   <div style="display:flex;gap:20px;align-items:flex-start;min-height:600px;">
     <div style="flex:1;">
-      <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px;">
-        <div>
-          <h3>Initial Embeddings</h3>
-          <div id="graph-initial"></div>
-        </div>
-        <div>
-          <h3>Final Embeddings</h3>
-          <div id="graph-final"></div>
-        </div>
-      </div>
+      <div id="graph-visualizations"></div>
       <div id="timeline"></div>
     </div>
     <div style="flex:1;min-width:400px;">
@@ -98,7 +89,7 @@
         links: edges
       };
       
-      let emb = [1.0, 0.5, 1.5, 0.8, 1.2, 0.3, 1.7, 0.9, 1.1, 0.6];
+      let emb = [2.0, 1.8, 1.2, 0.9, 1.1, 0.4, 0.6, 1.5, 1.3, 1.7];
       const timeline = [{layer:0, embeddings:emb.slice(), ops:[]}];
 
       function applyLayerJS(graph, embeddings, layerNum) {
@@ -164,13 +155,13 @@
       return {graph, timeline};
     }
 
-    function drawGraph(targetId, graph, embeddings) {
+    function drawGraph(targetId, graph, embeddings, initialEmbeddings = null) {
       try {
-        const w = 300, h = 300;
+        const w = 280, h = 280;
         const nodes = graph.nodes;
         const links = graph.links;
 
-        const cx = w/2, cy = h/2, r = Math.min(w,h)/2 - 40;
+        const cx = w/2, cy = h/2, r = Math.min(w,h)/2 - 50;
         const angle = (i) => 2 * Math.PI * i / nodes.length;
 
         let html = '<svg width="'+w+'" height="'+h+'">';
@@ -182,13 +173,18 @@
           const ay = cy + r * Math.sin(angle(a));
           const bx = cx + r * Math.cos(angle(b));
           const by = cy + r * Math.sin(angle(b));
-          html += '<line x1="'+ax+'" y1="'+ay+'" x2="'+bx+'" y2="'+by+'" stroke="#999" />';
+          html += '<line x1="'+ax+'" y1="'+ay+'" x2="'+bx+'" y2="'+by+'" stroke="#999" stroke-width="1" />';
         });
 
-        // nodes with embedding values
+        // Calculate dynamic node sizes based on embedding values
         const minv = Math.min(...embeddings);
         const maxv = Math.max(...embeddings);
         const norm = (v) => (maxv===minv) ? 0.5 : (v - minv)/(maxv-minv);
+        
+        // Base size and scaling factor
+        const baseSize = 12;
+        const maxSize = 25;
+        const sizeRange = maxSize - baseSize;
 
         nodes.forEach(n => {
           const i = n.id;
@@ -196,11 +192,28 @@
           const y = cy + r * Math.sin(angle(i));
           const v = embeddings[i];
           const t = norm(v);
+          
+          // Dynamic node size based on embedding value
+          const nodeSize = baseSize + (t * sizeRange);
+          
+          // Color based on embedding value
           const color = 'rgb(' + Math.round(255 * t) + ',0,' + Math.round(255*(1-t)) + ')';
+          
+          // Add change indicator if initial embeddings provided
+          let changeIndicator = '';
+          if (initialEmbeddings) {
+            const change = v - initialEmbeddings[i];
+            const changePercent = ((change / initialEmbeddings[i]) * 100).toFixed(0);
+            changeIndicator = change >= 0 ? '↗' : '↘';
+          }
+          
           html += '<g class="node" transform="translate('+x+','+y+')">';
-          html += '<circle r="20" fill="'+color+'" stroke="#222" stroke-width="2" />';
-          html += '<text x="0" y="-8" text-anchor="middle" font-size="8" fill="#fff" font-weight="bold">ID:'+i+'</text>';
-          html += '<text x="0" y="6" text-anchor="middle" font-size="9" fill="#fff" font-weight="bold">'+v.toFixed(2)+'</text>';
+          html += '<circle r="'+nodeSize+'" fill="'+color+'" stroke="#222" stroke-width="2" />';
+          html += '<text x="0" y="-'+Math.max(8, nodeSize-2)+'" text-anchor="middle" font-size="7" fill="#fff" font-weight="bold">ID:'+i+'</text>';
+          html += '<text x="0" y="'+Math.max(4, nodeSize-4)+'" text-anchor="middle" font-size="8" fill="#fff" font-weight="bold">'+v.toFixed(2)+'</text>';
+          if (changeIndicator) {
+            html += '<text x="'+Math.max(8, nodeSize+2)+'" y="-'+Math.max(4, nodeSize-4)+'" text-anchor="middle" font-size="10" fill="#ff6b6b" font-weight="bold">'+changeIndicator+'</text>';
+          }
           html += '</g>';
         });
 
@@ -210,6 +223,33 @@
         console.error('drawGraph error:', err);
         const el = document.getElementById(targetId);
         if (el) el.innerHTML = '<div style="color:crimson">Error drawing graph: '+(err.message||err)+'</div>';
+      }
+    }
+
+    function drawAllLayers(timeline, graph) {
+      try {
+        let html = '<h3>🔄 Layer-by-Layer Transformation</h3>';
+        html += '<div style="display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">';
+        
+        timeline.forEach((frame, idx) => {
+          const layerTitle = frame.layer === 0 ? 'Initial' : `Layer ${frame.layer}`;
+          html += '<div style="text-align: center;">';
+          html += '<h4 style="margin: 5px 0; font-size: 14px; color: #333;">' + layerTitle + '</h4>';
+          html += '<div id="graph-layer-' + frame.layer + '" style="border: 2px solid #ddd; border-radius: 8px; background: #fafafa;"></div>';
+          html += '</div>';
+        });
+        
+        html += '</div>';
+        document.getElementById('graph-visualizations').innerHTML = html;
+        
+        // Draw each layer
+        const initialEmbeddings = timeline[0].embeddings;
+        timeline.forEach((frame, idx) => {
+          drawGraph('graph-layer-' + frame.layer, graph, frame.embeddings, initialEmbeddings);
+        });
+      } catch (err) {
+        console.error('drawAllLayers error:', err);
+        document.getElementById('graph-visualizations').innerHTML = '<div style="color:crimson">Error drawing layers: '+(err.message||err)+'</div>';
       }
     }
 
@@ -372,11 +412,9 @@
     document.addEventListener('DOMContentLoaded', () => {
       console.log('Page loaded, initializing...');
 
-      // Show placeholder SVGs immediately
-      ['graph-initial', 'graph-final'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.innerHTML = '<svg width="300" height="300"><text x="150" y="150" text-anchor="middle">Loading...</text></svg>';
-      });
+      // Show placeholder for graph visualizations
+      const graphEl = document.getElementById('graph-visualizations');
+      if (graphEl) graphEl.innerHTML = '<div style="text-align: center; padding: 50px; color: #666;">Loading graph visualizations...</div>';
 
       function runOnce() {
         try {
@@ -387,10 +425,8 @@
           const timeline = payload.timeline;
           if (!timeline || !timeline.length) throw new Error('No timeline returned');
           
-          const initial = timeline[0];
-          const final = timeline[timeline.length-1];
-          drawGraph('graph-initial', payload.graph, initial.embeddings);
-          drawGraph('graph-final', payload.graph, final.embeddings);
+          // Draw all layers with dynamic sizing
+          drawAllLayers(timeline, payload.graph);
           showTimeline(timeline);
           
           // Show detailed calculations

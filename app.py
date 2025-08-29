@@ -87,8 +87,9 @@ def compute():
     pooling = data.get('pooling', 'mean')
 
     G = create_default_graph()
-    # initial embedding: diverse values to show model differences
-    emb = np.array([1.0, 0.5, 1.5, 0.8, 1.2, 0.3, 1.7, 0.9, 1.1, 0.6], dtype=float)
+    # initial embedding: diverse values representing different node types
+    # High influence nodes (0, 1), Medium nodes (2, 3, 4), Low influence nodes (5, 6), Hub nodes (7, 8, 9)
+    emb = np.array([2.0, 1.8, 1.2, 0.9, 1.1, 0.4, 0.6, 1.5, 1.3, 1.7], dtype=float)
 
     timeline = []
     timeline.append({'layer': 0, 'embeddings': emb.tolist(), 'ops': []})
